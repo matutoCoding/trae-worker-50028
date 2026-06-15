@@ -2,8 +2,35 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { DatabaseService } from './database';
 
+const isDev = process.env.NODE_ENV === 'development' || process.env.ELECTRON_IS_DEV === '1';
+const DEV_SERVER_URL = 'http://localhost:3000';
+
 let mainWindow: BrowserWindow | null;
 let dbService: DatabaseService;
+
+async function loadDevURLWithRetry(window: BrowserWindow, retries = 20, interval = 1500) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      await window.loadURL(DEV_SERVER_URL);
+      console.log(`[DEV] 成功加载开发服务器: ${DEV_SERVER_URL}`);
+      return true;
+    } catch (err) {
+      const remaining = retries - i - 1;
+      console.log(`[DEV] 等待开发服务器... (${remaining} 次剩余, ${interval}ms)`);
+      await new Promise(resolve => setTimeout(resolve, interval));
+    }
+  }
+  console.error('[DEV] 开发服务器连接超时，请确认 npm run dev:renderer 已启动');
+  window.webContents.executeJavaScript(`
+    document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#1a1a2e;color:#fff;font-family:sans-serif;">
+      <h1 style="color:#e94560;">🎻 弦轴配合系统</h1>
+      <h2>正在等待开发服务器启动...</h2>
+      <p style="color:#a0a0a0;margin:20px 0;">请确保 webpack-dev-server 正在运行于 ${DEV_SERVER_URL}</p>
+      <button onclick="location.reload()" style="padding:12px 24px;background:#e94560;color:#fff;border:none;border-radius:8px;font-size:16px;cursor:pointer;">刷新重试</button>
+    </div>';
+  `);
+  return false;
+}
 
 function createWindow() {
   mainWindow = new BrowserWindow({
@@ -18,13 +45,31 @@ function createWindow() {
     },
     title: '弦轴锥度配合系统 - 传统制琴工艺',
     backgroundColor: '#1a1a2e',
+    show: false,
   });
 
-  if (process.env.NODE_ENV === 'development') {
-    mainWindow.loadURL('http://localhost:3000');
-    mainWindow.webContents.openDevTools();
+  mainWindow.once('ready-to-show', () => {
+    mainWindow?.show();
+  });
+
+  if (isDev) {
+    console.log('[MODE] 开发模式 - 连接开发服务器');
+    loadDevURLWithRetry(mainWindow);
+    mainWindow.webContents.openDevTools({ mode: 'detach' });
   } else {
-    mainWindow.loadFile(path.join(__dirname, 'index.html'));
+    console.log('[MODE] 生产模式 - 加载本地构建产物');
+    const indexPath = path.join(__dirname, 'index.html');
+    console.log('[PROD] 加载文件:', indexPath);
+    mainWindow.loadFile(indexPath).catch(err => {
+      console.error('[PROD] 加载失败，请先执行 npm run build:', err);
+      mainWindow?.webContents.executeJavaScript(`
+        document.body.innerHTML = '<div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;background:#1a1a2e;color:#fff;font-family:sans-serif;">
+          <h1 style="color:#e94560;">⚠️ 未找到构建产物</h1>
+          <p style="color:#fdcb6e;margin:20px 0;">请先执行: <code style="background:#000;padding:4px 8px;border-radius:4px;">npm run build</code></p>
+          <p style="color:#a0a0a0;">或开发模式执行: <code style="background:#000;padding:4px 8px;border-radius:4px;">npm run dev</code></p>
+        </div>';
+      `);
+    });
   }
 
   mainWindow.on('closed', () => {
