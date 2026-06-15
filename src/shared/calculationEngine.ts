@@ -92,7 +92,9 @@ export function calculateTaperFit(
   const deviation = pegDimensions.taper - requiredTaper;
 
   const normalForce = stringTension.tension * Math.sin(Math.PI / 6);
-  const turningTorque = normalForce * pegMaterial.frictionCoefficient * (pegAvgDiameter / 2);
+  const pegAvgRadius_mm = pegAvgDiameter / 2;
+  const pegAvgRadius_m = pegAvgRadius_mm / 1000;
+  const turningTorque = normalForce * pegMaterial.frictionCoefficient * pegAvgRadius_m;
   const holdingTorque = turningTorque * SELF_LOCKING_FACTOR;
 
   let slipRisk: 'low' | 'medium' | 'high';
@@ -153,9 +155,10 @@ export function calculateTuningStability(
   pegMaterial: PegMaterial,
   humidity: number = HUMIDITY_REFERENCE
 ): TuningStabilityAnalysis {
-  const pegRadius = (pegDimensions.smallEndDiameter + pegDimensions.largeEndDiameter) / 4;
+  const pegRadius_mm = (pegDimensions.smallEndDiameter + pegDimensions.largeEndDiameter) / 4;
+  const pegRadius_m = pegRadius_mm / 1000;
   const stringAngle = Math.PI / 6;
-  const requiredTorque = stringTension.tension * pegRadius * Math.sin(stringAngle);
+  const requiredTorque = stringTension.tension * pegRadius_m * Math.sin(stringAngle);
 
   const normalForce = stringTension.tension * Math.sin(stringAngle / 2);
   const maxFrictionForce = normalForce * pegMaterial.frictionCoefficient;
@@ -201,7 +204,8 @@ export function calculateTuningStability(
 
   return {
     stringTension: stringTension.tension,
-    pegRadius,
+    pegRadius: pegRadius_mm,
+    pegRadius_m,
     stringAngle,
     requiredTorque,
     gripForce,

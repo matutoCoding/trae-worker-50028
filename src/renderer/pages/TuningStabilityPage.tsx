@@ -220,6 +220,9 @@ const TuningStabilityPage: React.FC<TuningStabilityPageProps> = ({ onAddAlert })
         <div className="card-header">
           <h2 className="card-title">弦轴在弦张力下的扭矩分析</h2>
         </div>
+        <p className="section-subtitle">
+          扭矩公式：<strong>T = F · r · sin(θ)</strong>，其中 F 为弦张力（N），r 为弦轴半径（m），θ 为包角（弧度）
+        </p>
         <div className="data-display">
           <div className="data-item">
             <div className="data-label">弦张力 F</div>
@@ -227,15 +230,30 @@ const TuningStabilityPage: React.FC<TuningStabilityPageProps> = ({ onAddAlert })
           </div>
           <div className="data-item">
             <div className="data-label">弦轴半径 r</div>
-            <div className="data-value">{analysis.pegRadius.toFixed(3)} <span className="data-unit">mm</span></div>
+            <div className="data-value">
+              {analysis.pegRadius.toFixed(3)} <span className="data-unit">mm</span>
+              <span style={{ color: '#666', fontSize: '12px', marginLeft: '6px' }}>
+                (= {(analysis.pegRadius_m || analysis.pegRadius / 1000).toFixed(6)} m)
+              </span>
+            </div>
           </div>
           <div className="data-item">
             <div className="data-label">包角 θ</div>
-            <div className="data-value">{(analysis.stringAngle * 180 / Math.PI).toFixed(0)}°</div>
+            <div className="data-value">
+              {(analysis.stringAngle * 180 / Math.PI).toFixed(0)}°
+              <span style={{ color: '#666', fontSize: '12px', marginLeft: '6px' }}>
+                (= {analysis.stringAngle.toFixed(3)} rad, sin = {Math.sin(analysis.stringAngle).toFixed(3)})
+              </span>
+            </div>
           </div>
           <div className="data-item">
             <div className="data-label">所需扭矩 T = F·r·sin(θ)</div>
-            <div className="data-value value-highlight">{analysis.requiredTorque.toFixed(4)} <span className="data-unit">N·m</span></div>
+            <div className="data-value value-highlight">
+              {analysis.requiredTorque.toFixed(4)} <span className="data-unit">N·m</span>
+              <span style={{ color: '#666', fontSize: '12px', marginLeft: '6px' }}>
+                (= {(analysis.requiredTorque * 1000).toFixed(2)} N·mm)
+              </span>
+            </div>
           </div>
           <div className="data-item">
             <div className="data-label">法向力 N</div>

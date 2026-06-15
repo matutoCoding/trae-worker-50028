@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { LibraryItem, RiskAlert, StringTension } from '../../shared/types';
 import { libraryService } from '../services/ipcService';
 import { MATERIAL_DATABASE, STANDARD_LIBRARY, calculateTaper } from '../../shared/calculationEngine';
+import { useAppContext } from '../context/AppContext';
 
 interface LibraryPageProps {
   onAddAlert: (alert: RiskAlert) => void;
 }
 
 const LibraryPage: React.FC<LibraryPageProps> = ({ onAddAlert }) => {
+  const navigate = useNavigate();
+  const { applyLibraryPreset } = useAppContext();
   const [libraryItems, setLibraryItems] = useState<LibraryItem[]>([]);
   const [filterType, setFilterType] = useState<string>('all');
   const [showCreateModal, setShowCreateModal] = useState(false);
@@ -136,7 +140,8 @@ const LibraryPage: React.FC<LibraryPageProps> = ({ onAddAlert }) => {
   };
 
   const handleApplyToInput = (item: LibraryItem) => {
-    alert(`已复制 "${item.name}" 方案参数。\n\n建议：在弦轴录入页面使用这些参数作为参考。`);
+    applyLibraryPreset(item);
+    navigate('/');
   };
 
   const updateStringTension = (index: number, field: keyof StringTension, value: string | number) => {
@@ -311,7 +316,7 @@ const LibraryPage: React.FC<LibraryPageProps> = ({ onAddAlert }) => {
 
                 <div className="btn-group" style={{ marginTop: '24px' }}>
                   <button className="btn btn-primary btn-sm" onClick={() => handleApplyToInput(item)}>
-                    📋 复制参数
+                    ✏️ 应用到录入页
                   </button>
                   {!item.isStandard && (
                     <button

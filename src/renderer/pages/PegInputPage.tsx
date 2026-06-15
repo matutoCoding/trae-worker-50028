@@ -1,13 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { PegRecord, PegMaterial, PegDimensions, PegBoxHoleDimensions, StringTension, RiskAlert } from '../../shared/types';
-import { MATERIAL_DATABASE, calculateTaper, calculateTaperFit, generateRiskAlerts } from '../../shared/calculationEngine';
+import { MATERIAL_DATABASE, calculateTaper, calculateTaperFit, generateRiskAlerts, calculateTuningStability } from '../../shared/calculationEngine';
 import { pegService } from '../services/ipcService';
+import { useAppContext } from '../context/AppContext';
 
 interface PegInputPageProps {
   onAddAlert: (alert: RiskAlert) => void;
 }
 
 const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
+  const navigate = useNavigate();
+  const { presetPegData, clearPreset } = useAppContext();
+
   const [instrumentType, setInstrumentType] = useState('violin');
   const [instrumentId, setInstrumentId] = useState('');
   const [maker, setMaker] = useState('');
@@ -35,6 +40,26 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
   useEffect(() => {
     loadRecords();
   }, []);
+
+  useEffect(() => {
+    if (presetPegData) {
+      setSelectedMaterial(presetPegData.material);
+      setPegSmallDiameter(presetPegData.pegDimensions.smallEndDiameter);
+      setPegLargeDiameter(presetPegData.pegDimensions.largeEndDiameter);
+      setPegLength(presetPegData.pegDimensions.length);
+      setHoleSmallDiameter(presetPegData.holeDimensions.smallEndDiameter);
+      setHoleLargeDiameter(presetPegData.holeDimensions.largeEndDiameter);
+      setHoleDepth(presetPegData.holeDimensions.depth);
+      setConcentricity(presetPegData.holeDimensions.concentricity);
+      const firstTension = presetPegData.stringTensions[0];
+      if (firstTension) {
+        setStringName(firstTension.stringName);
+        setTension(firstTension.tension);
+        setFrequency(firstTension.frequency);
+        setStringDiameter(firstTension.diameter);
+      }
+    }
+  }, [presetPegData]);
 
   const loadRecords = async () => {
     try {
@@ -70,6 +95,34 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
     diameter: stringDiameter,
   };
 
+  const fitQuality = useMemo(() => {
+    const analysis = calculateTaperFit(pegDimensions, holeDimensions, selectedMaterial, stringTension);
+    const stability = calculateTuningStability(pegDimensions, holeDimensions, stringTension, selectedMaterial);
+    const hasBindingRisk = concentricity > 0.05;
+    if (!analysis.isSelfLocking || analysis.slipRisk === 'high' || stability.holdingStability < 40) {
+      return 'poor' as const;
+    }
+    if (analysis.fitStatus === 'too_loose' || analysis.fitStatus === 'too_tight' || hasBindingRisk || stability.holdingStability < 60) {
+      return 'fair' as const;
+    }
+    if (analysis.fitStatus === 'optimal' && analysis.slipRisk === 'low' && stability.holdingStability >= 80 && !hasBindingRisk) {
+      return 'excellent' as const;
+    }
+    return 'good' as const;
+  }, [pegDimensions, holeDimensions, selectedMaterial, stringTension, concentricity]);
+
+  const handleStringNameChange = (name: string) => {
+    setStringName(name);
+    if (presetPegData) {
+      const match = presetPegData.stringTensions.find(t => t.stringName === name);
+      if (match) {
+        setTension(match.tension);
+        setFrequency(match.frequency);
+        setStringDiameter(match.diameter);
+      }
+    }
+  };
+
   const handleSave = async () => {
     const pegRecord: Omit<PegRecord, '_id'> = {
       instrumentId: instrumentId || `INST-${Date.now()}`,
@@ -82,14 +135,17 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
       pegDimensions,
       holeDimensions,
       stringTension,
-      fitQuality: 'good',
-      notes,
+      fitQuality,
+      notes: presetPegData
+        ? (notes ? `${notes}\n\n[工艺库方案来源: ${presetPegData.sourceLibraryName}]` : `[工艺库方案来源: ${presetPegData.sourceLibraryName}]`)
+        : notes,
     };
 
     try {
       const saved = await pegService.create(pegRecord);
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
+      if (presetPegData) clearPreset();
 
       const analysis = calculateTaperFit(pegDimensions, holeDimensions, selectedMaterial, stringTension);
       const stabilityAnalysis = {
@@ -188,15 +244,38 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
           </div>
           <div className="form-group">
             <label className="form-label">弦名</label>
-            <select className="form-select" value={stringName} onChange={e => setStringName(e.target.value)}>
+            <select className="form-select" value={stringName} onChange={e => handleStringNameChange(e.target.value)}>
               <option value="G">G弦</option>
               <option value="D">D弦</option>
               <option value="A">A弦</option>
               <option value="E">E弦</option>
             </select>
           </div>
+          <div className="form-group">
+            <label className="form-label">配合质量预览</label>
+            <span className={`status-badge status-${fitQuality}`}>
+              {fitQuality === 'excellent' ? '优秀' : fitQuality === 'good' ? '良好' : fitQuality === 'fair' ? '一般' : '较差'}
+            </span>
+          </div>
         </div>
       </div>
+
+      {presetPegData && (
+        <div className="card" style={{ border: '2px solid #00b894', background: 'rgba(0, 184, 148, 0.08)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <span style={{ color: '#00b894', fontWeight: 'bold' }}>📋 已应用工艺库方案：</span>
+              <span style={{ color: '#fff', marginLeft: '8px' }}>{presetPegData.sourceLibraryName}</span>
+              <span style={{ color: '#a0a0a0', fontSize: '13px', marginLeft: '12px' }}>
+                已带入材质、尺寸和张力参数，切换弦名将自动更新张力
+              </span>
+            </div>
+            <button className="btn btn-secondary btn-sm" onClick={() => clearPreset()}>
+              清除预设
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="card">
         <div className="card-header">
@@ -406,6 +485,7 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
           setInstrumentId('');
           setMaker('');
           setNotes('');
+          clearPreset();
         }}>
           🔄 清空表单
         </button>
@@ -431,6 +511,8 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
                 <th>弦轴锥度</th>
                 <th>孔锥度</th>
                 <th>过盈量</th>
+                <th>同轴度</th>
+                <th>配合质量</th>
                 <th>日期</th>
                 <th>操作</th>
               </tr>
@@ -442,8 +524,10 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
                   (record.holeDimensions.smallEndDiameter + record.holeDimensions.largeEndDiameter) / 2
                 );
                 const isBad = interference < 0.02 || interference > 0.06;
+                const hasConcentricityIssue = record.holeDimensions.concentricity > 0.05;
+                const rowHasError = isBad || hasConcentricityIssue || record.fitQuality === 'poor' || record.fitQuality === 'fair';
                 return (
-                  <tr key={record._id} className={isBad ? 'row-error' : ''}>
+                  <tr key={record._id} className={rowHasError ? 'row-error' : ''}>
                     <td>{record.instrumentId}</td>
                     <td>{record.instrumentType}</td>
                     <td>{record.stringName}</td>
@@ -452,6 +536,14 @@ const PegInputPage: React.FC<PegInputPageProps> = ({ onAddAlert }) => {
                     <td>1:{(1 / record.holeDimensions.taper).toFixed(1)}</td>
                     <td className={isBad ? 'value-danger' : 'value-good'}>
                       {interference.toFixed(3)} mm
+                    </td>
+                    <td className={hasConcentricityIssue ? 'value-danger' : ''}>
+                      {record.holeDimensions.concentricity.toFixed(3)} mm
+                    </td>
+                    <td>
+                      <span className={`status-badge status-${record.fitQuality}`}>
+                        {record.fitQuality === 'excellent' ? '优秀' : record.fitQuality === 'good' ? '良好' : record.fitQuality === 'fair' ? '一般' : '较差'}
+                      </span>
                     </td>
                     <td>{record.date}</td>
                     <td>

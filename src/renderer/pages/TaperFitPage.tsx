@@ -293,12 +293,22 @@ const TaperFitPage: React.FC<TaperFitPageProps> = ({ onAddAlert }) => {
             <div className="data-value">{analysis.contactArea.toFixed(2)} <span className="data-unit">mm²</span></div>
           </div>
           <div className="data-item">
-            <div className="data-label">转动扭矩</div>
-            <div className="data-value">{analysis.turningTorque.toFixed(3)} <span className="data-unit">N·m</span></div>
+            <div className="data-label">转动扭矩 T = N·μ·r</div>
+            <div className="data-value">
+              {analysis.turningTorque.toFixed(4)} <span className="data-unit">N·m</span>
+              <span style={{ color: '#666', fontSize: '12px', marginLeft: '6px' }}>
+                (= {(analysis.turningTorque * 1000).toFixed(2)} N·mm)
+              </span>
+            </div>
           </div>
           <div className="data-item">
-            <div className="data-label">握持扭矩</div>
-            <div className="data-value">{analysis.holdingTorque.toFixed(3)} <span className="data-unit">N·m</span></div>
+            <div className="data-label">握持扭矩 (×1.5安全系数)</div>
+            <div className="data-value">
+              {analysis.holdingTorque.toFixed(4)} <span className="data-unit">N·m</span>
+              <span style={{ color: '#666', fontSize: '12px', marginLeft: '6px' }}>
+                (= {(analysis.holdingTorque * 1000).toFixed(2)} N·mm)
+              </span>
+            </div>
           </div>
           <div className="data-item">
             <div className="data-label">推荐锥度</div>

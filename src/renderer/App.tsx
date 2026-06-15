@@ -7,6 +7,7 @@ import ArchivePage from './pages/ArchivePage';
 import LibraryPage from './pages/LibraryPage';
 import AlertModal from './components/AlertModal';
 import { RiskAlert } from '../shared/types';
+import { AppProvider } from './context/AppContext';
 
 const App: React.FC = () => {
   const [alerts, setAlerts] = useState<RiskAlert[]>([]);
@@ -52,73 +53,75 @@ const App: React.FC = () => {
   const criticalAlerts = alerts.filter(a => a.severity === 'critical' && !a.acknowledged);
 
   return (
-    <div className="app-container">
-      <aside className="sidebar">
-        <div className="logo">
-          <span className="logo-icon">🎻</span>
-          <span className="logo-text">弦轴配合系统</span>
-        </div>
-        <nav className="nav-menu">
-          {navItems.map(item => (
-            <NavLink
-              key={item.path}
-              to={item.path}
-              className={({ isActive }) =>
-                `nav-item ${isActive ? 'active' : ''}`
-              }
-            >
-              <span className="nav-icon">{item.icon}</span>
-              <span>{item.label}</span>
-            </NavLink>
-          ))}
-        </nav>
-      </aside>
+    <AppProvider>
+      <div className="app-container">
+        <aside className="sidebar">
+          <div className="logo">
+            <span className="logo-icon">🎻</span>
+            <span className="logo-text">弦轴配合系统</span>
+          </div>
+          <nav className="nav-menu">
+            {navItems.map(item => (
+              <NavLink
+                key={item.path}
+                to={item.path}
+                className={({ isActive }) =>
+                  `nav-item ${isActive ? 'active' : ''}`
+                }
+              >
+                <span className="nav-icon">{item.icon}</span>
+                <span>{item.label}</span>
+              </NavLink>
+            ))}
+          </nav>
+        </aside>
 
-      <main className="main-content">
-        <header className="topbar">
-          <h1 className="page-title">{pageTitles[location.pathname] || '弦轴配合系统'}</h1>
-          {criticalAlerts.length > 0 && (
-            <button className="btn btn-danger btn-sm" onClick={() => setShowAlertModal(true)}>
-              ⚠️ {criticalAlerts.length} 个风险预警
-            </button>
-          )}
-        </header>
+        <main className="main-content">
+          <header className="topbar">
+            <h1 className="page-title">{pageTitles[location.pathname] || '弦轴配合系统'}</h1>
+            {criticalAlerts.length > 0 && (
+              <button className="btn btn-danger btn-sm" onClick={() => setShowAlertModal(true)}>
+                ⚠️ {criticalAlerts.length} 个风险预警
+              </button>
+            )}
+          </header>
 
-        <div className="content-area">
-          <Routes>
-            <Route
-              path="/"
-              element={<PegInputPage onAddAlert={addAlert} />}
-            />
-            <Route
-              path="/taper-fit"
-              element={<TaperFitPage onAddAlert={addAlert} />}
-            />
-            <Route
-              path="/tuning-stability"
-              element={<TuningStabilityPage onAddAlert={addAlert} />}
-            />
-            <Route
-              path="/archive"
-              element={<ArchivePage onAddAlert={addAlert} />}
-            />
-            <Route
-              path="/library"
-              element={<LibraryPage onAddAlert={addAlert} />}
-            />
-          </Routes>
-        </div>
-      </main>
+          <div className="content-area">
+            <Routes>
+              <Route
+                path="/"
+                element={<PegInputPage onAddAlert={addAlert} />}
+              />
+              <Route
+                path="/taper-fit"
+                element={<TaperFitPage onAddAlert={addAlert} />}
+              />
+              <Route
+                path="/tuning-stability"
+                element={<TuningStabilityPage onAddAlert={addAlert} />}
+              />
+              <Route
+                path="/archive"
+                element={<ArchivePage onAddAlert={addAlert} />}
+              />
+              <Route
+                path="/library"
+                element={<LibraryPage onAddAlert={addAlert} />}
+              />
+            </Routes>
+          </div>
+        </main>
 
-      {showAlertModal && (
-        <AlertModal
-          alerts={alerts}
-          onClose={() => setShowAlertModal(false)}
-          onAcknowledge={acknowledgeAlert}
-          onClear={clearAlert}
-        />
-      )}
-    </div>
+        {showAlertModal && (
+          <AlertModal
+            alerts={alerts}
+            onClose={() => setShowAlertModal(false)}
+            onAcknowledge={acknowledgeAlert}
+            onClear={clearAlert}
+          />
+        )}
+      </div>
+    </AppProvider>
   );
 };
 

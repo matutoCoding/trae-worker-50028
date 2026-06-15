@@ -67,6 +67,7 @@ export interface TaperFitAnalysis {
 export interface TuningStabilityAnalysis {
   stringTension: number;
   pegRadius: number;
+  pegRadius_m?: number;
   stringAngle: number;
   requiredTorque: number;
   gripForce: number;
@@ -105,11 +106,36 @@ export interface InstrumentArchive {
   updatedAt?: string;
 }
 
+export interface RecheckResult {
+  stringName: string;
+  taper: number;
+  interference: number;
+  concentricity: number;
+  humidity: number;
+  fitStatus: 'too_tight' | 'optimal' | 'too_loose';
+  isSelfLocking: boolean;
+  slipRisk: 'low' | 'medium' | 'high';
+  bindingRisk: boolean;
+  notes?: string;
+}
+
+export interface RecheckReport {
+  date: string;
+  technician: string;
+  instrumentId: string;
+  ambientHumidity: number;
+  ambientTemperature: number;
+  results: RecheckResult[];
+  overallConclusion: string;
+  recommendations: string[];
+}
+
 export interface MaintenanceRecord {
   date: string;
-  type: 'fitting' | 'replacement' | 'adjustment' | 'other';
+  type: 'fitting' | 'replacement' | 'adjustment' | 'recheck' | 'other';
   description: string;
   technician: string;
+  recheckReport?: RecheckReport;
 }
 
 export interface LibraryItem {

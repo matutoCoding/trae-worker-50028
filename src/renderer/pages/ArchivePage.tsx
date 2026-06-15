@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { InstrumentArchive, PegRecord, MaintenanceRecord, RiskAlert } from '../../shared/types';
+import { InstrumentArchive, PegRecord, MaintenanceRecord, RiskAlert, RecheckResult, RecheckReport, PegDimensions, PegBoxHoleDimensions, PegMaterial, StringTension } from '../../shared/types';
 import { archiveService, pegService } from '../services/ipcService';
-import { calculateTaperFit, generateRiskAlerts } from '../../shared/calculationEngine';
+import { calculateTaperFit, generateRiskAlerts, calculateTaper, calculateTuningStability, MATERIAL_DATABASE } from '../../shared/calculationEngine';
 
 interface ArchivePageProps {
   onAddAlert: (alert: RiskAlert) => void;
@@ -131,6 +131,14 @@ const ArchivePage: React.FC<ArchivePageProps> = ({ onAddAlert }) => {
   const [addPegModal, setAddPegModal] = useState(false);
   const [selectedPegIds, setSelectedPegIds] = useState<string[]>([]);
 
+  const [showRecheckModal, setShowRecheckModal] = useState(false);
+  const [recheckArchive, setRecheckArchive] = useState<InstrumentArchive | null>(null);
+  const [recheckTechnician, setRecheckTechnician] = useState('');
+  const [recheckHumidity, setRecheckHumidity] = useState(45);
+  const [recheckTemperature, setRecheckTemperature] = useState(22);
+  const [recheckResults, setRecheckResults] = useState<Map<string, RecheckResult>>(new Map());
+  const [recheckNotes, setRecheckNotes] = useState<Map<string, string>>(new Map());
+
   const handleAddPegs = async (archiveId: string) => {
     try {
       await archiveService.update(archiveId, {
@@ -150,6 +158,191 @@ const ArchivePage: React.FC<ArchivePageProps> = ({ onAddAlert }) => {
         ? prev.filter(id => id !== pegId)
         : [...prev, pegId]
     );
+  };
+
+  const startRecheck = (archive: InstrumentArchive) => {
+    setRecheckArchive(archive);
+    setRecheckTechnician('');
+    setRecheckHumidity(45);
+    setRecheckTemperature(22);
+    setRecheckResults(new Map());
+    setRecheckNotes(new Map());
+
+    const pegs = getInstrumentPegs(archive);
+    const initialResults = new Map<string, RecheckResult>();
+    ['G', 'D', 'A', 'E'].forEach(stringName => {
+      const existingPeg = pegs.find(p => p.stringName === stringName);
+      if (existingPeg) {
+        const pegDims = existingPeg.pegDimensions;
+        const holeDims = existingPeg.holeDimensions;
+        const material = existingPeg.pegMaterial;
+        const st = existingPeg.stringTension;
+        const analysis = calculateTaperFit(pegDims, holeDims, material, st);
+        const interference = (
+          (pegDims.smallEndDiameter + pegDims.largeEndDiameter) / 2 -
+          (holeDims.smallEndDiameter + holeDims.largeEndDiameter) / 2
+        );
+        initialResults.set(stringName, {
+          stringName,
+          taper: pegDims.taper,
+          interference,
+          concentricity: holeDims.concentricity,
+          humidity: 45,
+          fitStatus: analysis.fitStatus,
+          isSelfLocking: analysis.isSelfLocking,
+          slipRisk: analysis.slipRisk,
+          bindingRisk: holeDims.concentricity > 0.05,
+        });
+      } else {
+        initialResults.set(stringName, {
+          stringName,
+          taper: 1 / 30,
+          interference: 0.04,
+          concentricity: 0.02,
+          humidity: 45,
+          fitStatus: 'optimal',
+          isSelfLocking: true,
+          slipRisk: 'low',
+          bindingRisk: false,
+        });
+      }
+    });
+    setRecheckResults(initialResults);
+    setShowRecheckModal(true);
+  };
+
+  const updateRecheckResult = (stringName: string, field: keyof RecheckResult, value: number | string | boolean) => {
+    setRecheckResults(prev => {
+      const newResults = new Map(prev);
+      const existing = newResults.get(stringName);
+      if (existing) {
+        const updated = { ...existing, [field]: value };
+        if (field === 'taper' || field === 'interference' || field === 'concentricity') {
+          const pegTaper = (field === 'taper') ? Number(value) : existing.taper;
+          const interference = (field === 'interference') ? Number(value) : existing.interference;
+          const concentricity = (field === 'concentricity') ? Number(value) : existing.concentricity;
+          const material = MATERIAL_DATABASE[0];
+          const st: StringTension = { stringName, tension: 32, frequency: 440, diameter: 0.6 };
+          const pegDims: PegDimensions = {
+            smallEndDiameter: 7.8,
+            largeEndDiameter: 7.8 + pegTaper * 24,
+            length: 24,
+            taper: pegTaper,
+          };
+          const holeDims: PegBoxHoleDimensions = {
+            smallEndDiameter: 7.8 - interference + (pegTaper * 24) / 2,
+            largeEndDiameter: 7.8 + pegTaper * 24 - interference - (pegTaper * 24) / 2,
+            depth: 23.5,
+            taper: pegTaper,
+            concentricity,
+          };
+          const analysis = calculateTaperFit(pegDims, holeDims, material, st);
+          updated.fitStatus = analysis.fitStatus;
+          updated.isSelfLocking = analysis.isSelfLocking;
+          updated.slipRisk = analysis.slipRisk;
+          updated.bindingRisk = concentricity > 0.05;
+        }
+        newResults.set(stringName, updated);
+      }
+      return newResults;
+    });
+  };
+
+  const updateRecheckNote = (stringName: string, note: string) => {
+    setRecheckNotes(prev => {
+      const newNotes = new Map(prev);
+      newNotes.set(stringName, note);
+      return newNotes;
+    });
+  };
+
+  const saveRecheckReport = async () => {
+    if (!recheckArchive || !recheckTechnician.trim()) {
+      alert('请填写复检技师姓名');
+      return;
+    }
+
+    const results: RecheckResult[] = [];
+    recheckResults.forEach((r, stringName) => {
+      results.push({ ...r, notes: recheckNotes.get(stringName) });
+    });
+
+    const hasProblems = results.some(r =>
+      r.fitStatus !== 'optimal' ||
+      !r.isSelfLocking ||
+      r.slipRisk !== 'low' ||
+      r.bindingRisk
+    );
+    const allExcellent = results.every(r =>
+      r.fitStatus === 'optimal' &&
+      r.isSelfLocking &&
+      r.slipRisk === 'low' &&
+      !r.bindingRisk
+    );
+
+    let overallConclusion: string;
+    const recommendations: string[] = [];
+
+    if (allExcellent) {
+      overallConclusion = '全部四根弦轴配合状态优秀，自锁良好，无回滑风险，无需修整';
+    } else if (!hasProblems) {
+      overallConclusion = '整体配合状态良好，满足使用要求，建议定期复检';
+    } else {
+      overallConclusion = '存在配合问题，建议根据下方建议进行修整';
+      results.forEach(r => {
+        if (r.fitStatus === 'too_loose') {
+          recommendations.push(`${r.stringName}弦：配合过松 (过盈量 ${r.interference.toFixed(3)}mm)，建议更换较粗弦轴或使用弦轴膏`);
+        }
+        if (r.fitStatus === 'too_tight') {
+          recommendations.push(`${r.stringName}弦：配合过紧 (过盈量 ${r.interference.toFixed(3)}mm)，建议使用铰刀扩孔`);
+        }
+        if (!r.isSelfLocking) {
+          recommendations.push(`${r.stringName}弦：锥度过大不满足自锁，必须修整锥度`);
+        }
+        if (r.slipRisk === 'high') {
+          recommendations.push(`${r.stringName}弦：回滑风险高，需立即处理`);
+        }
+        if (r.bindingRisk) {
+          recommendations.push(`${r.stringName}弦：同轴度偏差 ${r.concentricity.toFixed(3)}mm 过大，存在别劲风险，建议重新铰孔`);
+        }
+      });
+    }
+
+    if (recheckHumidity < 35 || recheckHumidity > 55) {
+      recommendations.push(`当前环境湿度 ${recheckHumidity}% 偏离最佳范围(40-50%)，建议控制环境湿度后再复检`);
+    }
+
+    const report: RecheckReport = {
+      date: new Date().toISOString().split('T')[0],
+      technician: recheckTechnician,
+      instrumentId: recheckArchive.instrumentId,
+      ambientHumidity: recheckHumidity,
+      ambientTemperature: recheckTemperature,
+      results,
+      overallConclusion,
+      recommendations,
+    };
+
+    const maintenanceRecord: MaintenanceRecord = {
+      date: report.date,
+      type: 'recheck',
+      technician: recheckTechnician,
+      description: `工艺复检：${overallConclusion}。发现 ${results.filter(r => r.fitStatus !== 'optimal' || !r.isSelfLocking || r.slipRisk !== 'low' || r.bindingRisk).length} 项需关注。${recommendations.length > 0 ? recommendations.join('；') : ''}`,
+      recheckReport: report,
+    };
+
+    try {
+      await archiveService.update(recheckArchive._id!, {
+        history: [...recheckArchive.history, maintenanceRecord],
+        lastMaintenanceDate: report.date,
+      });
+      setShowRecheckModal(false);
+      alert('复检报告已保存，已追加到维护历史');
+      loadData();
+    } catch (error) {
+      console.error('保存复检报告失败:', error);
+      alert('保存失败，请重试');
+    }
   };
 
   return (
@@ -304,21 +497,71 @@ const ArchivePage: React.FC<ArchivePageProps> = ({ onAddAlert }) => {
                       {archive.history.map((record, idx) => (
                         <div key={idx} style={{
                           padding: '12px 16px',
-                          background: 'rgba(0, 0, 0, 0.2)',
+                          background: record.type === 'recheck' ? 'rgba(0, 176, 255, 0.08)' : 'rgba(0, 0, 0, 0.2)',
                           borderRadius: '8px',
                           marginBottom: '8px',
+                          borderLeft: record.type === 'recheck' ? '4px solid #00b0ff' : 'none',
                         }}>
                           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
-                            <span style={{ fontWeight: 'bold', color: '#e94560' }}>
+                            <span style={{ fontWeight: 'bold', color: record.type === 'recheck' ? '#00b0ff' : '#e94560' }}>
                               {record.type === 'fitting' ? '配合修整' :
                                record.type === 'replacement' ? '更换弦轴' :
-                               record.type === 'adjustment' ? '调整' : '其他'}
+                               record.type === 'adjustment' ? '调整' :
+                               record.type === 'recheck' ? '🔬 工艺复检' : '其他'}
                             </span>
                             <span style={{ color: '#a0a0a0', fontSize: '13px' }}>
                               {record.date} · {record.technician}
                             </span>
                           </div>
                           <p style={{ color: '#a0a0a0', fontSize: '13px' }}>{record.description}</p>
+                          {record.recheckReport && (
+                            <div style={{ marginTop: '12px', padding: '12px', background: 'rgba(0, 0, 0, 0.2)', borderRadius: '6px', fontSize: '12px' }}>
+                              <div style={{ color: '#ccc', marginBottom: '8px' }}>
+                                <strong>复检报告</strong> · 环境 {record.recheckReport.ambientHumidity}%RH / {record.recheckReport.ambientTemperature}°C
+                              </div>
+                              <table style={{ width: '100%', fontSize: '12px', color: '#a0a0a0' }}>
+                                <thead>
+                                  <tr style={{ borderBottom: '1px solid #333' }}>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>弦位</th>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>锥度</th>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>过盈量</th>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>同轴度</th>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>状态</th>
+                                    <th style={{ textAlign: 'left', padding: '4px' }}>自锁</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {record.recheckReport.results.map((r, i) => (
+                                    <tr key={i} style={{ borderBottom: '1px solid #222' }}>
+                                      <td style={{ padding: '4px' }}>{r.stringName}</td>
+                                      <td style={{ padding: '4px' }}>1:{(1 / r.taper).toFixed(1)}</td>
+                                      <td style={{ padding: '4px', color: r.interference < 0.02 || r.interference > 0.06 ? '#ff6b6b' : '#00b894' }}>{r.interference.toFixed(3)}mm</td>
+                                      <td style={{ padding: '4px', color: r.concentricity > 0.05 ? '#ff6b6b' : '#00b894' }}>{r.concentricity.toFixed(3)}mm</td>
+                                      <td style={{ padding: '4px', color: r.fitStatus === 'optimal' ? '#00b894' : '#ff6b6b' }}>
+                                        {r.fitStatus === 'optimal' ? '良好' : r.fitStatus === 'too_tight' ? '过紧' : '过松'}
+                                      </td>
+                                      <td style={{ padding: '4px', color: r.isSelfLocking ? '#00b894' : '#ff6b6b' }}>
+                                        {r.isSelfLocking ? '✓' : '✗'}
+                                      </td>
+                                    </tr>
+                                  ))}
+                                </tbody>
+                              </table>
+                              <div style={{ marginTop: '8px', color: '#fdcb6e' }}>
+                                <strong>结论：</strong>{record.recheckReport.overallConclusion}
+                              </div>
+                              {record.recheckReport.recommendations.length > 0 && (
+                                <div style={{ marginTop: '8px', color: '#fdcb6e' }}>
+                                  <strong>建议：</strong>
+                                  <ul style={{ margin: '4px 0 0 20px', padding: 0 }}>
+                                    {record.recheckReport.recommendations.map((rec, ri) => (
+                                      <li key={ri}>{rec}</li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -336,6 +579,12 @@ const ArchivePage: React.FC<ArchivePageProps> = ({ onAddAlert }) => {
                   <div className="btn-group">
                     <button className="btn btn-primary btn-sm" onClick={() => handleAnalyzeArchive(archive)}>
                       🔍 风险分析
+                    </button>
+                    <button
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => startRecheck(archive)}
+                    >
+                      🔬 工艺复检
                     </button>
                     <button
                       className="btn btn-secondary btn-sm"
@@ -499,6 +748,171 @@ const ArchivePage: React.FC<ArchivePageProps> = ({ onAddAlert }) => {
                 onClick={() => selectedArchive._id && handleAddPegs(selectedArchive._id)}
               >
                 确认关联
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showRecheckModal && recheckArchive && (
+        <div className="modal-overlay" onClick={() => setShowRecheckModal(false)}>
+          <div className="modal" style={{ maxWidth: '1000px' }} onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2 className="modal-title">🔬 工艺复检 - {recheckArchive.maker} - {getInstrumentTypeText(recheckArchive.instrumentType)} {recheckArchive.model}</h2>
+              <button className="close-btn" onClick={() => setShowRecheckModal(false)}>×</button>
+            </div>
+
+            <div className="card" style={{ background: 'rgba(0, 0, 0, 0.2)', border: 'none' }}>
+              <h3 className="card-title">复检环境信息</h3>
+              <div className="form-grid">
+                <div className="form-group">
+                  <label className="form-label">复检技师</label>
+                  <input
+                    className="form-input"
+                    value={recheckTechnician}
+                    onChange={e => setRecheckTechnician(e.target.value)}
+                    placeholder="请输入技师姓名"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">环境湿度 (%)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    min="20"
+                    max="80"
+                    value={recheckHumidity}
+                    onChange={e => setRecheckHumidity(Number(e.target.value))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">环境温度 (°C)</label>
+                  <input
+                    type="number"
+                    className="form-input"
+                    min="10"
+                    max="40"
+                    value={recheckTemperature}
+                    onChange={e => setRecheckTemperature(Number(e.target.value))}
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label">乐器编号</label>
+                  <div className="data-value">{recheckArchive.instrumentId}</div>
+                </div>
+              </div>
+            </div>
+
+            <h3 style={{ color: '#e94560', marginTop: '20px', marginBottom: '12px' }}>四根弦轴逐项复测</h3>
+            <p className="section-subtitle">
+              逐项测量并录入每根弦轴的当前参数，系统会自动判定配合状态
+            </p>
+
+            {['G', 'D', 'A', 'E'].map(stringName => {
+              const r = recheckResults.get(stringName);
+              if (!r) return null;
+              const hasProblem = r.fitStatus !== 'optimal' || !r.isSelfLocking || r.slipRisk !== 'low' || r.bindingRisk;
+              return (
+                <div
+                  key={stringName}
+                  className="card"
+                  style={{
+                    background: hasProblem ? 'rgba(255, 107, 107, 0.05)' : 'rgba(0, 0, 0, 0.2)',
+                    border: hasProblem ? '1px solid #ff6b6b' : 'none',
+                    marginBottom: '16px',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
+                    <h3 className="card-title" style={{ margin: 0 }}>
+                      {stringName}弦
+                      {hasProblem && <span style={{ color: '#ff6b6b', marginLeft: '12px', fontSize: '14px' }}>⚠️ 有问题</span>}
+                    </h3>
+                    <span className={`status-badge ${r.fitStatus === 'optimal' ? 'status-good' : 'status-critical'}`}>
+                      {r.fitStatus === 'optimal' ? '配合良好' : r.fitStatus === 'too_tight' ? '配合过紧' : '配合过松'}
+                    </span>
+                  </div>
+                  <div className="form-grid">
+                    <div className="form-group">
+                      <label className="form-label">弦轴锥度 (1:X)</label>
+                      <input
+                        type="number"
+                        step="0.5"
+                        className={`form-input ${Math.abs(r.taper - 1/30) > 0.002 ? 'value-danger' : ''}`}
+                        value={1 / r.taper}
+                        onChange={e => updateRecheckResult(stringName, 'taper', 1 / Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">过盈量 (mm)</label>
+                      <input
+                        type="number"
+                        step="0.001"
+                        className={`form-input ${r.interference < 0.02 || r.interference > 0.06 ? 'value-danger' : ''}`}
+                        value={r.interference}
+                        onChange={e => updateRecheckResult(stringName, 'interference', Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">同轴度偏差 (mm)</label>
+                      <input
+                        type="number"
+                        step="0.001"
+                        className={`form-input ${r.concentricity > 0.05 ? 'value-danger' : ''}`}
+                        value={r.concentricity}
+                        onChange={e => updateRecheckResult(stringName, 'concentricity', Number(e.target.value))}
+                      />
+                    </div>
+                    <div className="form-group">
+                      <label className="form-label">局部湿度 (%)</label>
+                      <input
+                        type="number"
+                        min="20"
+                        max="80"
+                        className="form-input"
+                        value={r.humidity}
+                        onChange={e => updateRecheckResult(stringName, 'humidity', Number(e.target.value))}
+                      />
+                    </div>
+                  </div>
+                  <div className="data-display" style={{ marginTop: '12px' }}>
+                    <div className="data-item">
+                      <div className="data-label">自锁条件</div>
+                      <div className={`data-value ${r.isSelfLocking ? 'value-good' : 'value-danger'}`}>
+                        {r.isSelfLocking ? '✓ 满足' : '✗ 不满足'}
+                      </div>
+                    </div>
+                    <div className="data-item">
+                      <div className="data-label">回滑风险</div>
+                      <div className={`data-value ${r.slipRisk === 'low' ? 'value-good' : r.slipRisk === 'medium' ? 'value-warning' : 'value-danger'}`}>
+                        {r.slipRisk === 'low' ? '低' : r.slipRisk === 'medium' ? '中' : '高'}
+                      </div>
+                    </div>
+                    <div className="data-item">
+                      <div className="data-label">别劲风险</div>
+                      <div className={`data-value ${r.bindingRisk ? 'value-danger' : 'value-good'}`}>
+                        {r.bindingRisk ? '有' : '无'}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ marginTop: '12px' }}>
+                    <label className="form-label">本弦位备注</label>
+                    <input
+                      className="form-input"
+                      placeholder="记录异常情况、修整说明等"
+                      value={recheckNotes.get(stringName) || ''}
+                      onChange={e => updateRecheckNote(stringName, e.target.value)}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+
+            <div className="btn-group" style={{ marginTop: '24px', justifyContent: 'flex-end' }}>
+              <button className="btn btn-secondary" onClick={() => setShowRecheckModal(false)}>
+                取消
+              </button>
+              <button className="btn btn-primary" onClick={saveRecheckReport}>
+                💾 生成复检报告并保存
               </button>
             </div>
           </div>
